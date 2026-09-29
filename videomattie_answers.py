@@ -44,35 +44,75 @@ TIMEOUT_MS = 20_000                    # how long to wait for the button or dial
 LOGIN_PATIENCE = 900                   # seconds to wait for you to log in
 OUTPUT_DELIMITER = ";"                 # semicolon: Dutch Excel opens that correctly
 OUTPUT_LANGUAGE = "nl"                 # "nl" or "en"; controls the CSV headers only
+FB_LANGUAGES = ("nl", "en")            # Facebook interface languages to recognise
 
 # --------------------------------------------------- Facebook interface strings
-# These must match the language your Facebook account is set to. They are the
-# only place where the Dutch interface leaks into the code. Switch your account
-# to another language and these are the lines to change.
+# The labels the script looks for on the page, per Facebook interface language.
+# The script recognises every language listed in FB_LANGUAGES, so it works
+# whether your account is set to Dutch or English. The English labels still
+# need to be checked against a real English Facebook account.
 
-FB_VIEW_ANSWERS = "Antwoorden bekijken"
-FB_ANSWER_LIST = "Lidmaatschapsvragen en -antwoorden"
-FB_QUESTIONS_HEADING = "Lidmaatschapsvragen"
-FB_NO_ANSWERS = "Nog geen antwoorden"
-FB_NO_ANSWER_GIVEN = "Geen antwoord"
-FB_RULES_AGREED = "Akkoord met groepsregels"
-FB_RULES_NOT_AGREED = "Niet akkoord met de groepsregels"
-FB_RULES_NOT_AGREED_SELF = "niet akkoord bent gegaan"
-FB_JOINED_PATTERN = re.compile(
-    r"[Ll]id van .{0,80}?sinds\s+(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})")
+FB_TEXT = {
+    "nl": {
+        "view_answers": ["Antwoorden bekijken"],
+        "answer_list": ["Lidmaatschapsvragen en -antwoorden"],
+        "questions_heading": ["Lidmaatschapsvragen"],
+        "no_answers": ["Nog geen antwoorden"],
+        "no_answer_given": ["Geen antwoord"],
+        "rules_agreed": ["Akkoord met groepsregels"],
+        "rules_not_agreed": ["Niet akkoord met de groepsregels", "niet akkoord bent gegaan"],
+    },
+    "en": {
+        "view_answers": ["View answers", "View Answers"],
+        "answer_list": ["Membership questions and answers", "Membership Questions and Answers"],
+        "questions_heading": ["Membership questions", "Membership Questions"],
+        "no_answers": ["No answers yet"],
+        "no_answer_given": ["No answer"],
+        "rules_agreed": ["Agreed to group rules", "Agreed to the group rules"],
+        "rules_not_agreed": ["Has Not Agreed to Group Rules", "Did not agree to the group rules"],
+    },
+}
 
-DUTCH_MONTHS = {name: number for number, name in enumerate(
+
+def fb_texts(key):
+    """Every known spelling of one interface label, over all enabled languages."""
+    return [text for language in FB_LANGUAGES for text in FB_TEXT[language][key]]
+
+
+def fb_contains(page_text, key):
+    return any(text in page_text for text in fb_texts(key))
+
+
+def fb_startswith(line, key):
+    return any(line.startswith(text) for text in fb_texts(key))
+
+
+MONTHS = {name: number for number, name in enumerate(
     ["januari", "februari", "maart", "april", "mei", "juni",
      "juli", "augustus", "september", "oktober", "november", "december"], start=1)}
+MONTHS |= {name: number for number, name in enumerate(
+    ["january", "february", "march", "april", "may", "june",
+     "july", "august", "september", "october", "november", "december"], start=1)}
 
-DUTCH_WEEKDAYS = {"maandag": 0, "dinsdag": 1, "woensdag": 2, "donderdag": 3,
-                  "vrijdag": 4, "zaterdag": 5, "zondag": 6}
+WEEKDAYS = {"maandag": 0, "dinsdag": 1, "woensdag": 2, "donderdag": 3,
+            "vrijdag": 4, "zaterdag": 5, "zondag": 6,
+            "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+            "friday": 4, "saturday": 5, "sunday": 6}
+
+# "Lid van Videomattie sinds 22 september 2026"
+JOINED_DAY_MONTH_YEAR = re.compile(
+    r"(?:[Ll]id van|[Mm]ember of|[Jj]oined).{0,80}?(?:sinds|since|on)\s+(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})")
+# "Member of Videomattie since September 22, 2026"
+JOINED_MONTH_DAY_YEAR = re.compile(
+    r"(?:[Mm]ember of|[Jj]oined).{0,80}?(?:since|on)\s+([a-zA-Z]+)\s+(\d{1,2}),?\s+(\d{4})")
 
 JS_READ_ANSWERS = """
-(label) => {
-  const list = document.querySelector(`[aria-label="${label}"]`);
-  if (!list) return null;
-  return [...list.children].map(item => item.innerText);
+(labels) => {
+  for (const label of labels) {
+    const list = document.querySelector(`[aria-label="${label}"]`);
+    if (list) return [...list.children].map(item => item.innerText);
+  }
+  return null;
 }
 """
 
@@ -192,15 +232,20 @@ def previous_weekday(reference, weekday):
 
 
 def joined_date_from_page(text):
-    """'Lid van Videomattie sinds 22 september 2026' -> date(2026, 9, 22)."""
-    match = FB_JOINED_PATTERN.search(text)
-    if not match:
-        return None
-    day, month, year = match.group(1), match.group(2).lower(), match.group(3)
-    if month not in DUTCH_MONTHS:
+    """'Lid van Videomattie sinds 22 september 2026' or
+    'Member of Videomattie since September 22, 2026' -> date(2026, 9, 22)."""
+    match = JOINED_DAY_MONTH_YEAR.search(text)
+    if match:
+        day, month, year = match.group(1), match.group(2).lower(), match.group(3)
+    else:
+        match = JOINED_MONTH_DAY_YEAR.search(text)
+        if not match:
+            return None
+        month, day, year = match.group(1).lower(), match.group(2), match.group(3)
+    if month not in MONTHS:
         return None
     try:
-        return date(int(year), DUTCH_MONTHS[month], int(day))
+        return date(int(year), MONTHS[month], int(day))
     except ValueError:
         return None
 
@@ -216,31 +261,32 @@ def estimate_joined_date(text, reference):
 
     if not lowered.strip():
         return None, ""
-    if re.search(r"\b(zojuist|net|nu)\b", lowered) or \
-       re.search(r"\d+\s*(minuut|minuten|uur|uren)", lowered) or "vandaag" in lowered:
+    if re.search(r"\b(zojuist|net|nu|just now)\b", lowered) or \
+       re.search(r"\d+\s*(minuut|minuten|uur|uren|minutes?|hours?)\b", lowered) or \
+       "vandaag" in lowered or "today" in lowered:
         return day_zero, "day"
-    if "gisteren" in lowered:
+    if "gisteren" in lowered or "yesterday" in lowered:
         return day_zero - timedelta(days=1), "day"
-    for name, number in DUTCH_WEEKDAYS.items():
+    for name, number in WEEKDAYS.items():
         if name in lowered:
             return previous_weekday(day_zero, number), "day"
 
-    match = re.search(r"(\d+)\s*(dag|dagen)", lowered)
+    match = re.search(r"(\d+)\s*(dag|dagen|days?)\b", lowered)
     if match:
         return day_zero - timedelta(days=int(match.group(1))), "day"
-    if re.search(r"(een|1)\s*week", lowered):
+    if re.search(r"\b(een|1|a|one)\s*week\b", lowered):
         return day_zero - timedelta(days=7), "week"
-    match = re.search(r"(\d+)\s*weken", lowered)
+    match = re.search(r"(\d+)\s*(weken|weeks)", lowered)
     if match:
         return day_zero - timedelta(weeks=int(match.group(1))), "week"
-    if re.search(r"(een|1)\s*maand", lowered):
+    if re.search(r"\b(een|1|a|one)\s*(maand|month)\b", lowered):
         return day_zero - timedelta(days=30), "month"
-    match = re.search(r"(\d+)\s*maanden", lowered)
+    match = re.search(r"(\d+)\s*(maanden|months)", lowered)
     if match:
         return day_zero - timedelta(days=30 * int(match.group(1))), "month"
-    if re.search(r"(een|1)\s*jaar", lowered):
+    if re.search(r"\b(een|1|a|one)\s*(jaar|year)\b", lowered):
         return day_zero - timedelta(days=365), "year"
-    match = re.search(r"(\d+)\s*jaar", lowered)
+    match = re.search(r"(\d+)\s*(jaar|years)", lowered)
     if match:
         return day_zero - timedelta(days=365 * int(match.group(1))), "year"
     return None, ""
@@ -383,9 +429,9 @@ def blank_record(member, status, rules="", joined=""):
 
 
 def rules_status(page_text):
-    if FB_RULES_NOT_AGREED in page_text or FB_RULES_NOT_AGREED_SELF in page_text:
+    if fb_contains(page_text, "rules_not_agreed"):
         return "not_agreed"
-    if FB_RULES_AGREED in page_text:
+    if fb_contains(page_text, "rules_agreed"):
         return "agreed"
     return ""
 
@@ -398,7 +444,8 @@ def fetch_member(page, member):
               wait_until="domcontentloaded")
 
     try:
-        button = page.get_by_role("button", name=FB_VIEW_ANSWERS, exact=True).first
+        names = "|".join(re.escape(text) for text in fb_texts("view_answers"))
+        button = page.get_by_role("button", name=re.compile(f"^({names})$")).first
         button.wait_for(timeout=TIMEOUT_MS)
         found_button = True
     except PlaywrightTimeout:
@@ -409,20 +456,21 @@ def fetch_member(page, member):
     joined = joined.isoformat() if joined else ""
 
     if not found_button:
-        if FB_NO_ANSWERS in page_text:
+        if fb_contains(page_text, "no_answers"):
             return blank_record(member, "no_answers", rules_status(page_text), joined)
-        if FB_QUESTIONS_HEADING not in page_text:
+        if not fb_contains(page_text, "questions_heading"):
             return blank_record(member, "unreachable", "", joined)
         return blank_record(member, "no_button", rules_status(page_text), joined)
 
     button.click()
     try:
-        page.wait_for_selector(f'[aria-label="{FB_ANSWER_LIST}"]', timeout=TIMEOUT_MS)
+        selector = ", ".join(f'[aria-label="{text}"]' for text in fb_texts("answer_list"))
+        page.wait_for_selector(selector, timeout=TIMEOUT_MS)
     except PlaywrightTimeout:
         return blank_record(member, "no_dialog", "", joined)
 
     record = blank_record(member, "ok", "", joined)
-    record["items"] = page.evaluate(JS_READ_ANSWERS, FB_ANSWER_LIST) or []
+    record["items"] = page.evaluate(JS_READ_ANSWERS, fb_texts("answer_list")) or []
     page.keyboard.press("Escape")
     return record
 
@@ -437,13 +485,13 @@ def split_questions(record):
         if not lines:
             continue
         head = lines[0].strip()
-        if head.startswith(FB_RULES_AGREED):
-            rules = "agreed"
-        elif head.startswith(FB_RULES_NOT_AGREED):
+        if fb_startswith(head, "rules_not_agreed"):
             rules = "not_agreed"
+        elif fb_startswith(head, "rules_agreed"):
+            rules = "agreed"
         else:
             answer = " ".join(line.strip() for line in lines[1:]).strip()
-            questions[head] = "" if answer == FB_NO_ANSWER_GIVEN else answer
+            questions[head] = "" if answer in fb_texts("no_answer_given") else answer
     return questions, rules
 
 
