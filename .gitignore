@@ -1,0 +1,19 @@
+# Persoonsgegevens: nooit committen
+*.csv
+!voorbeeld/*.csv
+*.jsonl
+
+# Facebook-inlogsessie (browserprofiel met cookies)
+fb-session/
+fb-sessie/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Besturingssysteem en editor
+.DS_Store
+Thumbs.db
+.vscode/
