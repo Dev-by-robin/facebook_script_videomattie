@@ -182,9 +182,10 @@ because the spreadsheet usually ends up in a Dutch Excel.
 **Comma instead of semicolon.** Set `OUTPUT_DELIMITER` to `","`. The semicolon is there
 because Dutch Excel opens that without an import dialog.
 
-**A different Facebook language.** The block marked *Facebook interface strings* holds
-the Dutch labels the script looks for on the page. Set your account to another language
-and those lines are the ones to translate.
+**Facebook language.** The script recognises both a Dutch and an English Facebook
+interface. The block marked *Facebook interface strings* holds the labels it looks for
+per language, and `FB_LANGUAGES` decides which languages are used. For another language,
+add a block to `FB_TEXT` and its name to `FB_LANGUAGES`.
 
 **Faster or slower.** `PAUSE` is the gap between members and `LONG_PAUSE` is the longer
 breather it takes every `LONG_PAUSE_EVERY` members. They are there on purpose, see below.
@@ -215,8 +216,8 @@ Try `python` instead of `python3`.
 not an admin of the group, or the group slug in `GROUP` is wrong.
 
 **Every member gets `no_button` while the answers do exist** — your Facebook is probably
-set to a different language, so the script is looking for labels that are not on the
-page. See *Adjusting it* above.
+set to a language the script does not know yet, or Facebook changed a label. Compare the
+button text on the page with `FB_TEXT`. See *Adjusting it* above.
 
 **The browser window closed on its own** — that happens when the script finishes or
 crashes. Look at the terminal for the reason.
